@@ -1,0 +1,359 @@
+package scb.general.ejb;
+
+import static org.junit.Assert.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+import javax.ejb.*;
+import javax.naming.NamingException;
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnitRunner;
+
+import scb.util.*;
+import scb.exception.SCBApplicationException;
+import scb.wrapper.*;
+import scb.general.factory.SCBParamDAOFactory;
+import scb.general.wrapper.*;
+
+@RunWith(MockitoJUnitRunner.class)
+public class SCBParamSessionBeanTest {
+    
+    @Mock
+    private SessionContext mockSessionContext;
+    
+    @Mock
+    private SCBParamEntityHome mockScbParamEntityHome;
+    
+    @Mock
+    private TSCBParamEntityHome mockTScbParamEntityHome;
+    
+    @Mock
+    private SCBParamLockEntityHome mockScbParamLockEntityHome;
+    
+    @Mock
+    private SECQuerySessionProxy mockQuerySessionProxy;
+    
+    @Mock
+    private SystemProperties mockSystemProperties;
+    
+    @Mock
+    private SCBParamEntity mockScbParamEntity;
+    
+    @Mock
+    private TSCBParamEntity mockTScbParamEntity;
+    
+    @Mock
+    private SCBParamLockEntity mockScbParamLockEntity;
+    
+    @Mock
+    private LogWriter mockLogWriter;
+    
+    private SCBParamSessionBean scbParamSessionBean;
+    private SCBParamWrapper testWrapper;
+    private UserDetail testMakerDetail;
+    private UserDetail testCheckerDetail;
+    
+    @Before
+    public void setUp() throws Exception {
+        MockitoAnnotations.openMocks(this);
+        
+        // Create instance
+        scbParamSessionBean = new SCBParamSessionBean();
+        
+        // Set private fields using reflection
+        setPrivateField(scbParamSessionBean, "mySessionCtx", mockSessionContext);
+        setPrivateField(scbParamSessionBean, "scbparamEntityHome", mockScbParamEntityHome);
+        setPrivateField(scbParamSessionBean, "tScbParamEntityHome", mockTScbParamEntityHome);
+        setPrivateField(scbParamSessionBean, "scbparamLockEntityHome", mockScbParamLockEntityHome);
+        setPrivateField(scbParamSessionBean, "querySessionProxy", mockQuerySessionProxy);
+        setPrivateField(scbParamSessionBean, "sysProperties", mockSystemProperties);
+        setPrivateField(scbParamSessionBean, "logger", mockLogWriter);
+        
+        // Initialize test data
+        testMakerDetail = createMockUserDetail("MAKER001");
+        testCheckerDetail = createMockUserDetail("CHECKER001");
+        
+        testWrapper = new SCBParamWrapper();
+        testWrapper.scbparamkey = "TEST_KEY";
+        testWrapper.scbparamvalue = "TEST_VALUE";
+        testWrapper.makerDetail = testMakerDetail;
+        testWrapper.checkerDetail = testCheckerDetail;
+        testWrapper.statusFlag = EBBSConstants.ACTIVE;
+        
+        // Default mock behavior
+        when(mockSystemProperties.getCurrentApplicationID()).thenReturn("TEST_APP");
+        when(mockSessionContext.getRollbackOnly()).thenReturn(false);
+        
+        // Mock LogWriter methods
+        doNothing().when(mockLogWriter).printErrorMessage(any(Exception.class));
+        doNothing().when(mockLogWriter).printDebugMode(anyString());
+        doNothing().when(mockLogWriter).println(anyString());
+    }
+    
+    private void setPrivateField(Object object, String fieldName, Object value) throws Exception {
+        try {
+            java.lang.reflect.Field field = object.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(object, value);
+        } catch (NoSuchFieldException e) {
+            java.lang.reflect.Field field = object.getClass().getSuperclass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(object, value);
+        }
+    }
+    
+    private UserDetail createMockUserDetail(String userId) {
+        UserDetail userDetail = mock(UserDetail.class);
+        when(userDetail.getUserID()).thenReturn(userId);
+        return userDetail;
+    }
+    
+    // ============ Basic Tests ============
+    
+    @Test
+    public void testGetSessionContext() {
+        scbParamSessionBean.setSessionContext(mockSessionContext);
+        SessionContext context = scbParamSessionBean.getSessionContext();
+        assertEquals(mockSessionContext, context);
+    }
+    
+    @Test
+    public void testEjbLifecycleMethods() {
+        scbParamSessionBean.ejbActivate();
+        scbParamSessionBean.ejbPassivate();
+        scbParamSessionBean.ejbRemove();
+    }
+    
+    // ============ Create Method Tests ============
+    
+    @Test
+    public void testCreateSuccessMakerOnly() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_ONLY);
+        SCBParamEntityKey key = new SCBParamEntityKey(testWrapper.scbparamkey);
+        
+        when(mockScbParamEntityHome.findByPrimaryKey(key))
+            .thenThrow(new ObjectNotFoundException());
+        when(mockScbParamEntityHome.create(any(SCBParamWrapper.class)))
+            .thenReturn(mockScbParamEntity);
+        
+        Object result = scbParamSessionBean.create(testWrapper);
+        assertTrue(result instanceof Boolean);
+        assertTrue((Boolean)result);
+    }
+    
+    @Test
+    public void testCreateSuccessMakerChecker() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_CHECKER);
+        SCBParamEntityKey key = new SCBParamEntityKey(testWrapper.scbparamkey);
+        
+        when(mockScbParamEntityHome.findByPrimaryKey(key))
+            .thenThrow(new ObjectNotFoundException());
+        when(mockTScbParamEntityHome.create(any(SCBParamWrapper.class)))
+            .thenReturn(mockTScbParamEntity);
+        
+        Object result = scbParamSessionBean.create(testWrapper);
+        assertTrue(result instanceof Boolean);
+        assertTrue((Boolean)result);
+    }
+    
+    @Test(expected = SCBApplicationException.class)
+    public void testCreateDuplicateRecord() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_ONLY);
+        SCBParamEntityKey key = new SCBParamEntityKey(testWrapper.scbparamkey);
+        
+        when(mockScbParamEntityHome.findByPrimaryKey(key))
+            .thenReturn(mockScbParamEntity);
+        
+        scbParamSessionBean.create(testWrapper);
+    }
+    
+    // ============ Delete Method Tests ============
+    
+    @Test
+    public void testDeleteMakerOnlySuccess() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_ONLY);
+        SCBParamEntityKey key = new SCBParamEntityKey(testWrapper.scbparamkey);
+        
+        when(mockScbParamEntityHome.findByPrimaryKeyForUpdate(key))
+            .thenReturn(mockScbParamEntity);
+        
+        boolean result = scbParamSessionBean.delete(testWrapper);
+        assertTrue(result);
+        verify(mockScbParamEntity).remove();
+    }
+    
+    @Test(expected = SCBApplicationException.class)
+    public void testDeleteMakerOnlyRecordNotFound() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_ONLY);
+        SCBParamEntityKey key = new SCBParamEntityKey(testWrapper.scbparamkey);
+        
+        when(mockScbParamEntityHome.findByPrimaryKeyForUpdate(key))
+            .thenThrow(new FinderException("Record not found"));
+        
+        scbParamSessionBean.delete(testWrapper);
+    }
+    
+    // ============ Fetch Methods Tests ============
+    
+    @Test
+    public void testFetchForViewSuccess() throws Exception {
+        SCBParamWrapper mainWrapper = new SCBParamWrapper();
+        mainWrapper.scbparamkey = "TEST_KEY";
+        mainWrapper.scbparamvalue = "TEST_VALUE";
+        mainWrapper.makerDetail = testMakerDetail;
+        mainWrapper.statusFlag = EBBSConstants.ACTIVE;
+        
+        short[] statusFlag = {EBBSConstants.ACTIVE};
+        when(mockScbParamEntityHome.findByStatusFlag(eq(testWrapper.scbparamkey), eq(statusFlag)))
+            .thenReturn(mockScbParamEntity);
+        when(mockScbParamEntity.getWrapper()).thenReturn(mainWrapper);
+        
+        AbstractWrapper result = scbParamSessionBean.fetchForView(testWrapper);
+        assertNotNull(result);
+        assertEquals("TEST_KEY", ((SCBParamWrapper)result).scbparamkey);
+    }
+    
+    @Test(expected = SCBApplicationException.class)
+    public void testFetchForViewObjectNotFound() throws Exception {
+        short[] statusFlag = {EBBSConstants.ACTIVE};
+        when(mockScbParamEntityHome.findByStatusFlag(eq(testWrapper.scbparamkey), eq(statusFlag)))
+            .thenThrow(new ObjectNotFoundException());
+        
+        scbParamSessionBean.fetchForView(testWrapper);
+    }
+    
+    @Test
+    public void testFetchForModificationSuccess() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_CHECKER);
+        SCBParamEntityKey mainKey = new SCBParamEntityKey(testWrapper.scbparamkey);
+        
+        SCBParamWrapper mainWrapper = new SCBParamWrapper();
+        mainWrapper.scbparamkey = "TEST_KEY";
+        mainWrapper.scbparamvalue = "TEST_VALUE";
+        mainWrapper.makerDetail = testMakerDetail;
+        mainWrapper.statusFlag = EBBSConstants.ACTIVE;
+        
+        when(mockScbParamEntityHome.findByPrimaryKey(mainKey))
+            .thenReturn(mockScbParamEntity);
+        when(mockScbParamEntity.getWrapper()).thenReturn(mainWrapper);
+        when(mockQuerySessionProxy.executeMethodOnRemoteObject(
+            eq("isModifyAllowed"), any(Class[].class), any(), any(), any())).thenReturn(true);
+        
+        SCBParamLockEntityKey lockKey = new SCBParamLockEntityKey("TEST_KEY", "TEST_VALUE");
+        when(mockScbParamLockEntityHome.findByPrimaryKey(lockKey))
+            .thenThrow(new ObjectNotFoundException());
+        
+        AbstractWrapper result = scbParamSessionBean.fetchForModification(testWrapper);
+        assertNotNull(result);
+        assertEquals("TEST_KEY", ((SCBParamWrapper)result).scbparamkey);
+    }
+    
+    // ============ Lock Management Tests ============
+    
+    @Test
+    public void testIsLockedReturnsFalseWhenSameUser() throws Exception {
+        String key = "TEST_KEY";
+        String value = "TEST_VALUE";
+        UserDetail userDetail = createMockUserDetail("USER001");
+        
+        SCBParamLockEntityKey lockKey = new SCBParamLockEntityKey(key, value);
+        SCBParamWrapper lockWrapper = new SCBParamWrapper();
+        lockWrapper.makerDetail = userDetail;
+        
+        when(mockScbParamLockEntityHome.findByPrimaryKey(lockKey))
+            .thenReturn(mockScbParamLockEntity);
+        when(mockScbParamLockEntity.getWrapper()).thenReturn(lockWrapper);
+        
+        boolean result = scbParamSessionBean.isLocked(key, value, userDetail);
+        assertFalse(result);
+    }
+    
+    @Test
+    public void testIsLockedReturnsTrueWhenDifferentUser() throws Exception {
+        String key = "TEST_KEY";
+        String value = "TEST_VALUE";
+        UserDetail userDetail1 = createMockUserDetail("USER001");
+        UserDetail userDetail2 = createMockUserDetail("USER002");
+        
+        SCBParamLockEntityKey lockKey = new SCBParamLockEntityKey(key, value);
+        SCBParamWrapper lockWrapper = new SCBParamWrapper();
+        lockWrapper.makerDetail = userDetail1;
+        
+        when(mockScbParamLockEntityHome.findByPrimaryKey(lockKey))
+            .thenReturn(mockScbParamLockEntity);
+        when(mockScbParamLockEntity.getWrapper()).thenReturn(lockWrapper);
+        
+        boolean result = scbParamSessionBean.isLocked(key, value, userDetail2);
+        assertTrue(result);
+    }
+    
+    @Test
+    public void testReleaseLockSuccess() throws Exception {
+        SCBParamLockEntityKey lockKey = new SCBParamLockEntityKey(
+            testWrapper.scbparamkey, testWrapper.scbparamvalue);
+        
+        when(mockScbParamLockEntityHome.findByPrimaryKeyForUpdate(lockKey))
+            .thenReturn(mockScbParamLockEntity);
+        
+        boolean result = scbParamSessionBean.releaseLock(testWrapper);
+        assertTrue(result);
+        verify(mockScbParamLockEntity).remove();
+    }
+    
+    // ============ Authorise Method Tests ============
+    
+    @Test
+    public void testAuthoriseSuccessForCreate() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_CHECKER);
+        TSCBParamEntityKey tempKey = new TSCBParamEntityKey(testWrapper.scbparamkey);
+        
+        SCBParamWrapper tempWrapper = new SCBParamWrapper();
+        tempWrapper.scbparamkey = "TEST_KEY";
+        tempWrapper.scbparamvalue = "TEST_VALUE";
+        tempWrapper.makerDetail = testMakerDetail;
+        tempWrapper.statusFlag = EBBSConstants.AUTHORISE_CREATE;
+        
+        when(mockTScbParamEntityHome.findByPrimaryKeyForUpdate(tempKey))
+            .thenReturn(mockTScbParamEntity);
+        when(mockTScbParamEntity.getWrapper()).thenReturn(tempWrapper);
+        when(mockQuerySessionProxy.executeMethodOnRemoteObject(
+            eq("isAuthorizer"), any(Class[].class), any(), any(), any())).thenReturn(true);
+        
+        boolean result = scbParamSessionBean.authorise(testWrapper);
+        assertTrue(result);
+    }
+    
+    @Test(expected = SCBApplicationException.class)
+    public void testAuthoriseMakerOnly() throws Exception {
+        testWrapper.setAuthorisationLevel(EBBSConstants.MAKER_ONLY);
+        scbParamSessionBean.authorise(testWrapper);
+    }
+    
+    // ============ Simple Validation Test ============
+    
+    @Test
+    public void testValidateSuccess() throws Exception {
+        SCBParamEntityKey key = new SCBParamEntityKey(testWrapper.scbparamkey);
+        
+        when(mockScbParamEntityHome.findByPrimaryKey(key))
+            .thenThrow(new ObjectNotFoundException());
+        
+        Object result = scbParamSessionBean.validate(testWrapper, true);
+        assertNotNull(result);
+    }
+    
+    // ============ Quick Setup Test ============
+    
+    @Test
+    public void testQuickSetup() {
+        assertNotNull(scbParamSessionBean);
+        assertNotNull(testWrapper);
+        assertEquals("TEST_KEY", testWrapper.scbparamkey);
+        assertEquals("TEST_VALUE", testWrapper.scbparamvalue);
+    }
+}
